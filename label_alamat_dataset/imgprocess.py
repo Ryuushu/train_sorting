@@ -53,7 +53,7 @@ def ocr_characters(chars, save_path=None):
     for i, c in enumerate(chars):
         text = pytesseract.image_to_string(
         c,
-        config='--psm 8 --oem 3 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+        config='--psm 10 --oem 3 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ'
     ).strip()
 
         results.append(text)
@@ -140,21 +140,13 @@ def preprocess_image(img, base_filename="noname"):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
     # 1. Peningkatan kontras lokal (CLAHE)
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
     enhanced = clahe.apply(gray)
 
-    # 2. Blur ringan
-    blur = cv2.GaussianBlur(enhanced, (3, 3), 0)
-
-    # 3. Adaptive threshold
     thresh = cv2.adaptiveThreshold(
-        blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY_INV, 25, 12
-    )
-
-    # 4. Morphological cleaning
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-    opened = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=1)
+    enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+    cv2.THRESH_BINARY_INV, 25, 12
+)
 
     # === Visualisasi hasil tahap demi tahap ===
     fig, axs = plt.subplots(1, 4, figsize=(18, 5))
@@ -162,40 +154,82 @@ def preprocess_image(img, base_filename="noname"):
     axs[0].set_title("GrayScale")
     axs[1].imshow(enhanced, cmap="gray")
     axs[1].set_title("Kontras")
-    axs[2].imshow(blur, cmap="gray")
-    axs[2].set_title("Gaussian Blur")
-    axs[3].imshow(opened, cmap="gray")
-    axs[3].set_title("operasi morfologi")
+    axs[2].imshow(thresh, cmap="gray")
+    axs[2].set_title("Threshold")
+    plt.hist(enhanced.ravel(), 256, [0,256])
+    plt.title('Histogram - CLAHE Enhanced')
     plt.tight_layout()
     plt.show()
 
     # === Segmentasi karakter + OCR untuk file ini ===
-    segment_characters(opened, base_filename)
-    return opened
+    segment_characters(thresh, base_filename)
+    return thresh
 
 # Deteksi ROI otomatis
-def auto_detect_box(img):
+def auto_detect_box(img, debug=False):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    blur = cv2.GaussianBlur(gray, (5, 5), 0)
-    _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    blur = cv2.GaussianBlur(gray, (5,5), 0)
 
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    boxes = []
-    for cnt in contours:
-        x, y, w, h = cv2.boundingRect(cnt)
-        if 300 < w < img.shape[1] and 40 < h < 300 and 150 < y < img.shape[0] // 2:
-            boxes.append((x, y, w, h))
+    # === 1️⃣ Deteksi tepi kertas putih ===
+    edges = cv2.Canny(blur, 50, 150)
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    if not boxes:
+    if not contours:
+        print("Tidak ada kontur kertas terdeteksi.")
         return None
 
-    boxes = sorted(boxes, key=lambda b: b[2] * b[3], reverse=True)
-    x, y, w, h = boxes[0]
-    x = max(0, x + 10)
-    y = max(0, y + 375)
-    w = min(img.shape[1] - x, w - 20)
-    h = min(img.shape[0] - y, h - 15)
-    return (x, y, x + w, y + h)
+    # Ambil kontur terbesar (biasanya kertas)
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)
+    paper_cnt = contours[0]
+    x_p, y_p, w_p, h_p = cv2.boundingRect(paper_cnt)
+
+    # Crop area kertas
+    paper_crop = img[y_p:y_p+h_p, x_p:x_p+w_p]
+
+    # === 2️⃣ Dari dalam kertas, cari area tulisan gelap ===
+    gray_paper = cv2.cvtColor(paper_crop, cv2.COLOR_BGR2GRAY)
+    _, text_thresh = cv2.threshold(gray_paper, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+    # Cari kontur tulisan
+    contours_text, _ = cv2.findContours(text_thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    text_boxes = []
+    for c in contours_text:
+        x, y, w, h = cv2.boundingRect(c)
+        if 20 < w < paper_crop.shape[1]*0.9 and 10 < h < paper_crop.shape[0]*0.5:
+            text_boxes.append((x, y, w, h))
+
+    if not text_boxes:
+        print("Tidak ada area tulisan terdeteksi dalam kertas.")
+        return (x_p, y_p, x_p+w_p, y_p+h_p)
+
+    # Ambil area tulisan terbesar (biasanya alamat/kecamatan)
+    text_boxes = sorted(text_boxes, key=lambda b: b[2]*b[3], reverse=True)
+    x_t, y_t, w_t, h_t = text_boxes[0]
+
+    # Perkecil bounding box (misalnya 10% di setiap sisi)
+    shrink_ratio = 0.1  # bisa kamu ubah ke 0.05 atau 0.2
+    x_t = int(x_t + w_t * shrink_ratio)
+    y_t = int(y_t + h_t * shrink_ratio)
+    w_t = int(w_t * (1 - 2 * shrink_ratio))
+    h_t = int(h_t * (1 - 2 * shrink_ratio))
+
+
+    # Konversi koordinat ke posisi asli gambar
+    x_final = x_p + x_t
+    y_final = y_p + y_t
+    w_final = w_t
+    h_final = h_t
+
+    if debug:
+        vis = img.copy()
+        cv2.rectangle(vis, (x_p, y_p), (x_p+w_p, y_p+h_p), (255, 0, 0), 2)  # kotak kertas biru
+        cv2.rectangle(vis, (x_final, y_final), (x_final+w_final, y_final+h_final), (0, 255, 0), 2)  # tulisan hijau
+        plt.imshow(cv2.cvtColor(vis, cv2.COLOR_BGR2RGB))
+        plt.title("Deteksi Kertas (Biru) dan Tulisan (Hijau)")
+        plt.axis("off")
+        plt.show()
+
+    return (x_final, y_final, x_final + w_final, y_final + h_final)
 
 # Gambar bounding box
 def draw_box():
@@ -284,13 +318,14 @@ def show_image(path):
     current_path = path
 
     auto_box = auto_detect_box(current_img)
+
     if auto_box:
         start_point = (auto_box[0], auto_box[1])
         end_point = (auto_box[2], auto_box[3])
         print(f"Otomatis terdeteksi: x={auto_box[0]}, y={auto_box[1]}, "
               f"w={auto_box[2] - auto_box[0]}, h={auto_box[3] - auto_box[1]}")
     else:
-        start_point = (50, 50)
+        start_point = (150, 100)
         end_point = (300, 200)
         print("Tidak terdeteksi otomatis, gunakan posisi default.")
 
