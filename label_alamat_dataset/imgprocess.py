@@ -100,19 +100,6 @@ def ocr_characters(chars, save_path=None):
 
     # Gabungkan semua karakter
     full_text = "".join(results)
-
-    # Simpan CSV
-    if save_path:
-        with open(save_path, "w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["Char_Index", "Recognized"])
-            for i, t in enumerate(results):
-                writer.writerow([i + 1, t])
-            writer.writerow([])
-            writer.writerow(["Full_Text", full_text])
-        print(f"Hasil OCR EasyOCR disimpan di {save_path}")
-
-    print(f"HASIL OCR (EasyOCR) = {full_text}")
     return results
 
 def segment_characters(thresh_img, base_filename="noname"):
