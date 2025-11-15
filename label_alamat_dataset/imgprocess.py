@@ -6,10 +6,11 @@ import os
 import shutil
 from tkinter import Tk
 from tkinter.filedialog import askopenfilename
-import pytesseract
+# import pytesseract
+import easyocr
 import csv
 
-pytesseract.pytesseract.tesseract_cmd = r"C:/Program Files/Tesseract-OCR/tesseract.exe"
+reader = easyocr.Reader(['en'], gpu=False)  
 
 # Folder output crop dan hasil preprocessing
 output_crop_folder = "hasil_crop"
@@ -47,20 +48,60 @@ def get_next_filename(folder, prefix="data", ext=".png"):
     next_num = max(nums) + 1 if nums else 1
     return f"{prefix}_{next_num:04d}{ext}"
 
+def save_training_chars(chars, ground_truth):
+    # Folder baru khusus dataset training OCR
+    BASE_FOLDER = "train_ocr"
+    os.makedirs(BASE_FOLDER, exist_ok=True)
+
+    for img, label in zip(chars, ground_truth):
+
+        # Abaikan jika label bukan 1 karakter
+        if len(label) != 1:
+            continue
+
+        # Buat folder karakter di folder training
+        char_folder = f"{BASE_FOLDER}/{label}"
+        os.makedirs(char_folder, exist_ok=True)
+
+        # Hitung index file berikutnya
+        count = len(os.listdir(char_folder))
+
+        # Simpan gambar
+        save_path = f"{char_folder}/{label}_{count+1}.png"
+        cv2.imwrite(save_path, img)
+
+        print(f"[SAVE] {save_path}")
+
+    print("[DONE] Semua karakter tersimpan di folder dataset_training/ (terpisah dari folder label alamat).")
+
 def ocr_characters(chars, save_path=None):
-    "Lakukan OCR pada setiap karakter dan simpan hasilnya ke file CSV."
+    "OCR tiap karakter menggunakan EasyOCR."
     results = []
     for i, c in enumerate(chars):
-        text = pytesseract.image_to_string(
-        c,
-        config='--psm 10 --oem 3 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-    ).strip()
+
+        # EasyOCR butuh 3 channel (RGB)
+        if len(c.shape) == 2:
+            c_rgb = cv2.cvtColor(c, cv2.COLOR_GRAY2RGB)
+        else:
+            c_rgb = c
+
+        # OCR
+        out = reader.readtext(c_rgb, detail=0)
+
+        # Ambil huruf pertama jika ada
+        text = out[0] if len(out) > 0 else ""
+        text = text.strip()
+
+        # Ambil 1 karakter saja (untuk dataset training)
+        if len(text) > 1:
+            text = text[0]
 
         results.append(text)
 
     # Gabungkan semua karakter
     full_text = "".join(results)
 
+    # Simpan CSV
     if save_path:
         with open(save_path, "w", newline="") as f:
             writer = csv.writer(f)
@@ -69,9 +110,9 @@ def ocr_characters(chars, save_path=None):
                 writer.writerow([i + 1, t])
             writer.writerow([])
             writer.writerow(["Full_Text", full_text])
-        print(f"Hasil OCR disimpan di {save_path}")
+        print(f"Hasil OCR EasyOCR disimpan di {save_path}")
 
-    print(f"HASIL OCR = {full_text}")
+    print(f"HASIL OCR (EasyOCR) = {full_text}")
     return results
 
 def segment_characters(thresh_img, base_filename="noname"):
@@ -130,7 +171,8 @@ def segment_characters(thresh_img, base_filename="noname"):
     # === OCR per karakter dan simpan CSV per gambar ===
     ocr_csv_path = os.path.join("hasil_segmentasi", f"{base_filename}_ocr.csv")
     os.makedirs("hasil_segmentasi", exist_ok=True)
-    ocr_characters(chars, save_path=ocr_csv_path)
+    results = ocr_characters(chars, save_path=ocr_csv_path)
+    save_training_chars(chars, results)
 
     return chars
 
