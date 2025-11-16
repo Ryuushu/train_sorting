@@ -150,7 +150,7 @@ def process_frame(frame, debug=True):
 
 # --- Live Camera ---
 # ========================= LIVE CAMERA =========================
-url = "http://192.168.100.222:4747/video"
+url = "http://192.168.1.11:4747/video"
 cap = cv2.VideoCapture(url)
 
 if not cap.isOpened():

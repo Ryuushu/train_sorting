@@ -19,8 +19,8 @@ os.makedirs(output_crop_folder, exist_ok=True)
 os.makedirs(output_pre_folder, exist_ok=True)
 
 # Folder YOLO disimpan
-images_train_folder = "C:/Users/Taufiqur Rahman/OneDrive/Documents/label_alamat_dataset/label_alamat_dataset/images/train"
-labels_train_folder = "C:/Users/Taufiqur Rahman/OneDrive/Documents/label_alamat_dataset/label_alamat_dataset/labels/train"
+images_train_folder = r"C:\Users\Taufiqur Rahman\OneDrive\Documents\train_sorting\label_alamat_dataset\images\train"
+labels_train_folder = r"C:\Users\Taufiqur Rahman\OneDrive\Documents\train_sorting\label_alamat_dataset\labels\train"
 os.makedirs(images_train_folder, exist_ok=True)
 os.makedirs(labels_train_folder, exist_ok=True)
 
@@ -163,36 +163,58 @@ def segment_characters(thresh_img, base_filename="noname"):
 
     return chars
 
+def show_and_save_subplot(crop_img, gray, enhanced, thresh, chars, base_filename):
+    """Menampilkan subplot besar + menyimpannya sebagai file PNG."""
+    n_chars = len(chars)
+    total_cols = 4  # crop + gray + clahe + thresh
+
+    fig, axs = plt.subplots(1, total_cols, figsize=(4*total_cols, 5))
+
+    # 1. Crop
+    axs[0].imshow(cv2.cvtColor(crop_img, cv2.COLOR_BGR2RGB))
+    axs[0].set_title("Crop")
+    axs[0].axis("off")
+
+    # 2. Grayscale
+    axs[1].imshow(gray, cmap="gray")
+    axs[1].set_title("Gray")
+    axs[1].axis("off")
+
+    # 3. CLAHE
+    axs[2].imshow(enhanced, cmap="gray")
+    axs[2].set_title("CLAHE")
+    axs[2].axis("off")
+
+    # 4. Threshold
+    axs[3].imshow(thresh, cmap="gray")
+    axs[3].set_title("Threshold")
+    axs[3].axis("off")
+
+    plt.tight_layout()
+
+    # Simpan
+    os.makedirs("hasil_subplot", exist_ok=True)
+    out_path = f"hasil_subplot/{base_filename}_subplot.png"
+    plt.savefig(out_path, dpi=200)
+    print(f"[SAVE] Subplot lengkap disimpan ke: {out_path}")
+
+    plt.show()
+
 # Fungsi preprocessing citra setelah crop
 def preprocess_image(img, base_filename="noname"):
-    "Preprocessing dilakukan setelah gambar di-crop."
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # 1. Peningkatan kontras lokal (CLAHE)
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
     enhanced = clahe.apply(gray)
 
     thresh = cv2.adaptiveThreshold(
-    enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-    cv2.THRESH_BINARY_INV, 25, 12
-)
+        enhanced, 255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV,
+        25, 12
+    )
 
-    # === Visualisasi hasil tahap demi tahap ===
-    fig, axs = plt.subplots(1, 4, figsize=(18, 5))
-    axs[0].imshow(gray, cmap="gray")
-    axs[0].set_title("GrayScale")
-    axs[1].imshow(enhanced, cmap="gray")
-    axs[1].set_title("Kontras")
-    axs[2].imshow(thresh, cmap="gray")
-    axs[2].set_title("Threshold")
-    plt.hist(enhanced.ravel(), 256, [0,256])
-    plt.title('Histogram - CLAHE Enhanced')
-    plt.tight_layout()
-    plt.show()
-
-    # === Segmentasi karakter + OCR untuk file ini ===
-    segment_characters(thresh, base_filename)
-    return thresh
+    return gray, enhanced, thresh
 
 # Deteksi ROI otomatis
 def auto_detect_box(img, debug=False):
@@ -310,21 +332,61 @@ def on_key(event):
 
 # Simpan hasil crop & preprocessing
 def save_crop():
-    "Simpan hasil crop dan preprocessing + OCR."
+    global current_img, current_path, start_point, end_point
+
+    # === Simpan gambar asli ke folder YOLO ===
+    save_uploaded_image()
+
+    # =========================
+    # HITUNG YOLO BBOX
+    # =========================
     x1, y1 = start_point
     x2, y2 = end_point
-    crop = current_img[y1:y2, x1:x2]
+
+    img_h, img_w = current_img.shape[:2]
+
+    x_center = ((x1 + x2) / 2) / img_w
+    y_center = ((y1 + y2) / 2) / img_h
+    w = (x2 - x1) / img_w
+    h = (y2 - y1) / img_h
 
     base_filename = os.path.splitext(os.path.basename(current_path))[0]
 
-    crop_path = os.path.join(output_crop_folder, f"{base_filename}.jpg")
-    cv2.imwrite(crop_path, crop)
-    print(f"Crop disimpan ke: {crop_path}")
+    # =========================
+    # SIMPAN YOLO LABEL
+    # =========================
+    label_path = os.path.join(labels_train_folder, f"{base_filename}.txt")
+    with open(label_path, "w") as f:
+        f.write(f"0 {x_center:.6f} {y_center:.6f} {w:.6f} {h:.6f}\n")
 
-    processed = preprocess_image(crop, base_filename)
-    pre_path = os.path.join(output_pre_folder, f"{base_filename}_pre.jpg")
-    cv2.imwrite(pre_path, processed)
-    print(f"Preprocessing disimpan ke: {pre_path}")
+    print(f"Label YOLO disimpan ke: {label_path}")
+
+    # =========================
+    # CROP REGION
+    # =========================
+    crop_img = current_img[y1:y2, x1:x2]
+
+    # =========================
+    # PREPROCESS
+    # =========================
+    gray, enhanced, thresh = preprocess_image(crop_img, base_filename)
+
+    # =========================
+    # SEGMENTASI + OCR
+    # =========================
+    chars = segment_characters(thresh, base_filename)
+
+    # =========================
+    # SUBPLOT LENGKAP (crop + preprocess + chars)
+    # =========================
+    show_and_save_subplot(
+        crop_img=crop_img,
+        gray=gray,
+        enhanced=enhanced,
+        thresh=thresh,
+        chars=chars,
+        base_filename=base_filename
+    )
 
 # Pilih gambar
 def upload_image():
@@ -337,6 +399,12 @@ def upload_image():
     root.destroy()
     return file_path
 
+def save_uploaded_image():
+    base_filename = os.path.splitext(os.path.basename(current_path))[0]
+    dst_path = os.path.join(images_train_folder, f"{base_filename}.jpg")
+
+    cv2.imwrite(dst_path, current_img)
+    print(f"Gambar asli disimpan ke: {dst_path}")
 
 # Tampilkan gambar dan ROI
 def show_image(path):
@@ -345,7 +413,6 @@ def show_image(path):
 
     current_img = cv2.imread(path)
     current_path = path
-
     auto_box = auto_detect_box(current_img)
 
     if auto_box:

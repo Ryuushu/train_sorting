@@ -1,6 +1,6 @@
 
-train: C:/Users/Taufiqur Rahman/OneDrive/Documents/label_alamat_dataset/label_alamat_dataset/processed/images/train
-val: C:/Users/Taufiqur Rahman/OneDrive/Documents/label_alamat_dataset/label_alamat_dataset/processed/images/val
+train: C:/Users/Taufiqur Rahman/OneDrive/Documents/train_sorting/label_alamat_dataset/processed/images/train
+val: C:/Users/Taufiqur Rahman/OneDrive/Documents/train_sorting/label_alamat_dataset/processed/images/val
 
 nc: 1
 names: ['alamatkiri']
