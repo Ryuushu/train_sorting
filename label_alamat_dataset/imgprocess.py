@@ -2,6 +2,7 @@
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
+import tensorflow as tf
 import os
 import shutil
 from tkinter import Tk
@@ -10,6 +11,9 @@ from tkinter.filedialog import askopenfilename
 import easyocr
 import csv
 
+IMG_SIZE = 64
+MODEL_PATH = r"C:\Users\Taufiqur Rahman\OneDrive\Documents\train_sorting\label_alamat_dataset\char_model.h5"
+DATASET_DIR = "train_ocr"  # folder berisi subfolder per kelas: A/, B/, 0/, 1/, dst
 reader = easyocr.Reader(['en'], gpu=False)  
 
 # Folder output crop dan hasil preprocessing
@@ -33,6 +37,8 @@ current_img = None
 current_path = None
 fig = None
 ax = None
+_model = None
+_labels = None
 
 # Fungsi penamaan file
 def get_next_filename(folder, prefix="data", ext=".png"):
@@ -72,7 +78,7 @@ def save_training_chars(chars, ground_truth):
 
         print(f"[SAVE] {save_path}")
 
-    print("[DONE] Semua karakter tersimpan di folder dataset_training/ (terpisah dari folder label alamat).")
+    print("[DONE] Semua karakter tersimpan di folder dataset_training")
 
 def ocr_characters(chars, save_path=None):
     "OCR tiap karakter menggunakan EasyOCR."
@@ -102,8 +108,64 @@ def ocr_characters(chars, save_path=None):
     full_text = "".join(results)
     return results
 
+def load_model_and_labels(model_path=MODEL_PATH, dataset_dir=DATASET_DIR):
+    """
+    Muat model keras (.h5) dan susun daftar label dari folder dataset_dir.
+    Men-set global _model dan _labels.
+    """
+    global _model, _labels
+
+    if _model is not None and _labels is not None:
+        return _model, _labels
+
+    # muat model
+    if not os.path.isfile(model_path):
+        raise FileNotFoundError(f"Model tidak ditemukan: {model_path}")
+
+    print("[INFO] Loading model:", model_path)
+    _model = tf.keras.models.load_model(model_path)
+
+    # ambil label dari nama folder di DATASET_DIR (sorted)
+    if not os.path.isdir(dataset_dir):
+        raise FileNotFoundError(f"Dataset dir tidak ditemukan: {dataset_dir}")
+
+    labels = sorted([
+        d for d in os.listdir(dataset_dir)
+        if os.path.isdir(os.path.join(dataset_dir, d))
+    ])
+
+    if not labels:
+        raise ValueError(f"Tidak ada folder label ditemukan di: {dataset_dir}")
+
+    _labels = labels
+    print("[INFO] Loaded labels:", _labels)
+
+    return _model, _labels
+
+def predict_char_from_array(img_array):
+    """
+    Menerima crop karakter (numpy array), mengembalikan tuple (char, confidence)
+    Pastikan model & labels sudah ada; fungsi ini akan memuatnya bila perlu.
+    """
+    # muat model & labels jika belum
+    model, labels = load_model_and_labels()
+
+    # preprocess
+    proc = preprocess_image(img_array, img_size=IMG_SIZE)
+
+    # prediksi
+    preds = model.predict(proc, verbose=0)  # returns [[...]]
+    preds = np.asarray(preds).squeeze()  # jadi 1D array (num_classes,)
+
+    # indeks max
+    idx = int(np.argmax(preds))
+    confidence = float(preds[idx])
+    char = labels[idx]
+
+    return char, confidence
+
 def segment_characters(thresh_img, base_filename="noname"):
-    "Segmentasi karakter dan normalisasi ukuran."
+    "Segmentasi karakter + normalisasi + prediksi CNN + gabung jadi 1 string."
     if np.mean(thresh_img) > 127:
         thresh_img = cv2.bitwise_not(thresh_img)
 
@@ -122,15 +184,15 @@ def segment_characters(thresh_img, base_filename="noname"):
 
     if not char_boxes:
         print("Tidak ada karakter terdeteksi.")
-        return []
+        return [], [], ""
 
     # Urutkan kiri ke kanan
     char_boxes = sorted(char_boxes, key=lambda b: b[0])
 
-    target_size = (80, 120)  # lebih besar, lebih detail
+    target_size = (80, 120)
     chars = []
 
-    # Normalisasi tiap karakter tanpa menyimpan file gambar
+    # Normalisasi tiap karakter
     for (x, y, w, h) in char_boxes:
         char_crop = clean[y:y + h, x:x + w]
         pad_x = max(0, (h - w) // 2)
@@ -141,7 +203,7 @@ def segment_characters(thresh_img, base_filename="noname"):
         resized = cv2.resize(padded, target_size, interpolation=cv2.INTER_AREA)
         chars.append(resized)
 
-    print(f"[{len(chars)} karakter tersegmentasi (tidak disimpan ke file).")
+    print(f"[{len(chars)} karakter tersegmentasi].")
 
     # === Subplot hasil segmentasi ===
     fig, axs = plt.subplots(1, len(chars), figsize=(15, 4))
@@ -155,13 +217,32 @@ def segment_characters(thresh_img, base_filename="noname"):
     plt.tight_layout()
     plt.show()
 
-    # === OCR per karakter dan simpan CSV per gambar ===
+    # === EASYOCR (opsional) ===
     ocr_csv_path = os.path.join("hasil_segmentasi", f"{base_filename}_ocr.csv")
     os.makedirs("hasil_segmentasi", exist_ok=True)
-    results = ocr_characters(chars, save_path=ocr_csv_path)
-    save_training_chars(chars, results)
+    # results_easyocr = ocr_characters(chars, save_path=ocr_csv_path)
+    # save_training_chars(chars, results_easyocr)
 
-    return chars
+    # ============================================
+    #  CNN PREDIKSI TIAP KARAKTER + GABUNG STRING
+    # ============================================
+    print("\n==== PREDIKSI CNN ====")
+    cnn_results = []
+    cnn_string = ""
+
+    for i, char_img in enumerate(chars):
+        pred_char, conf = predict_char_from_array(char_img)
+        cnn_results.append((pred_char, conf))
+
+        cnn_string += pred_char  # 🔥 gabungkan ke string
+
+        print(f"Char-{i+1}: {pred_char} (conf={conf:.3f})")
+
+    print("\n=== GABUNGAN KARAKTER CNN ===")
+    print("->", cnn_string)
+
+    # return: gambar character, hasil tuple, string final
+    return chars, cnn_results, cnn_string
 
 def show_and_save_subplot(crop_img, gray, enhanced, thresh, chars, base_filename):
     """Menampilkan subplot besar + menyimpannya sebagai file PNG."""
@@ -200,8 +281,31 @@ def show_and_save_subplot(crop_img, gray, enhanced, thresh, chars, base_filename
 
     plt.show()
 
+def preprocess_image(img, img_size=IMG_SIZE):
+    """
+    Input: img (numpy array), grayscale or BGR.
+    Output: array shape (1, IMG_SIZE, IMG_SIZE, 1), dtype float32, scaled [0,1]
+    """
+    if img is None:
+        raise ValueError("preprocess_image menerima None")
+
+    # pastikan grayscale
+    if len(img.shape) == 3:
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    # resize - mempertahankan aspect? model biasanya dilatih pada square
+    img_resized = cv2.resize(img, (img_size, img_size), interpolation=cv2.INTER_AREA)
+
+    # normalisasi ke [0,1]
+    img_norm = img_resized.astype("float32") / 255.0
+
+    # ubah shape -> (1, img_size, img_size, 1)
+    img_final = np.expand_dims(img_norm, axis=(0, -1))
+
+    return img_final
+
 # Fungsi preprocessing citra setelah crop
-def preprocess_image(img, base_filename="noname"):
+def preprocess_image1(img, base_filename="noname"):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
@@ -369,12 +473,12 @@ def save_crop():
     # =========================
     # PREPROCESS
     # =========================
-    gray, enhanced, thresh = preprocess_image(crop_img, base_filename)
+    gray, enhanced, thresh = preprocess_image1(crop_img, base_filename)
 
     # =========================
     # SEGMENTASI + OCR
     # =========================
-    chars = segment_characters(thresh, base_filename)
+    chars_string = segment_characters(thresh, base_filename)
 
     # =========================
     # SUBPLOT LENGKAP (crop + preprocess + chars)
@@ -384,7 +488,7 @@ def save_crop():
         gray=gray,
         enhanced=enhanced,
         thresh=thresh,
-        chars=chars,
+        chars=chars_string,
         base_filename=base_filename
     )
 

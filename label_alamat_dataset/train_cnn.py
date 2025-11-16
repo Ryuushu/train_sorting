@@ -73,3 +73,36 @@ history = model.fit(
 )
 
 print("Training selesai! Model tersimpan sebagai char_model.h5")
+import matplotlib.pyplot as plt
+
+# --- Plot Hasil Training ---
+acc = history.history["accuracy"]
+val_acc = history.history["val_accuracy"]
+loss = history.history["loss"]
+val_loss = history.history["val_loss"]
+epochs_range = range(1, len(acc) + 1)
+
+plt.figure(figsize=(12,5))
+
+# SUBPLOT 1 - ACCURACY
+plt.subplot(1, 2, 1)
+plt.plot(epochs_range, acc, label="Training Accuracy")
+plt.plot(epochs_range, val_acc, label="Validation Accuracy")
+plt.title("Accuracy")
+plt.xlabel("Epoch")
+plt.ylabel("Accuracy")
+plt.legend()
+plt.grid(True)
+
+# SUBPLOT 2 - LOSS
+plt.subplot(1, 2, 2)
+plt.plot(epochs_range, loss, label="Training Loss")
+plt.plot(epochs_range, val_loss, label="Validation Loss")
+plt.title("Loss")
+plt.xlabel("Epoch")
+plt.ylabel("Loss")
+plt.legend()
+plt.grid(True)
+
+plt.tight_layout()
+plt.show()
