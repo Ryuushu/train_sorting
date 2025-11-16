@@ -8,23 +8,21 @@ import shutil
 from tkinter import Tk
 from tkinter.filedialog import askopenfilename
 # import pytesseract
-import easyocr
+# import easyocr
 import csv
 
 IMG_SIZE = 64
-MODEL_PATH = r"C:\Users\Taufiqur Rahman\OneDrive\Documents\train_sorting\label_alamat_dataset\char_model.h5"
-DATASET_DIR = "train_ocr"  # folder berisi subfolder per kelas: A/, B/, 0/, 1/, dst
-reader = easyocr.Reader(['en'], gpu=False)  
+MODEL_PATH = r"char_model.h5"
+DATASET_DIR = "../train_ocr"  
 
-# Folder output crop dan hasil preprocessing
 output_crop_folder = "hasil_crop"
 output_pre_folder = "hasil_preprocessing"
 os.makedirs(output_crop_folder, exist_ok=True)
 os.makedirs(output_pre_folder, exist_ok=True)
 
-# Folder YOLO disimpan
-images_train_folder = r"C:\Users\Taufiqur Rahman\OneDrive\Documents\train_sorting\label_alamat_dataset\images\train"
-labels_train_folder = r"C:\Users\Taufiqur Rahman\OneDrive\Documents\train_sorting\label_alamat_dataset\labels\train"
+
+images_train_folder = r"images\train"
+labels_train_folder = r"labels\train"
 os.makedirs(images_train_folder, exist_ok=True)
 os.makedirs(labels_train_folder, exist_ok=True)
 
@@ -328,7 +326,7 @@ def auto_detect_box(img, debug=False):
     # === 1️⃣ Deteksi tepi kertas putih ===
     edges = cv2.Canny(blur, 50, 150)
     contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
+    # print(contours)
     if not contours:
         print("Tidak ada kontur kertas terdeteksi.")
         return None
