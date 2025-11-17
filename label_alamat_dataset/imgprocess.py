@@ -12,8 +12,14 @@ from tkinter.filedialog import askopenfilename
 import csv
 
 IMG_SIZE = 64
+<<<<<<< Updated upstream
 MODEL_PATH = r"char_model.h5"
 DATASET_DIR = "../train_ocr"  
+=======
+MODEL_PATH = r"C:\Users\Taufiqur Rahman\OneDrive\Documents\train_sorting\label_alamat_dataset\char_model.h5"
+DATASET_DIR = "train_ocr"  # folder berisi subfolder per karakter
+reader = easyocr.Reader(['en'], gpu=False)  
+>>>>>>> Stashed changes
 
 output_crop_folder = "hasil_crop"
 output_pre_folder = "hasil_preprocessing"
@@ -422,11 +428,9 @@ def on_move(event):
     end_point = (new_x1 + w, new_y1 + h)
     draw_box()
 
-
 def on_release(event):
     global dragging
     dragging = False
-
 
 def on_key(event):
     if event.key == 'c':  # tekan 'C' untuk menyimpan crop & preprocessing
@@ -439,12 +443,8 @@ def save_crop():
     # === Simpan gambar asli ke folder YOLO ===
     save_uploaded_image()
 
-    # =========================
-    # HITUNG YOLO BBOX
-    # =========================
     x1, y1 = start_point
     x2, y2 = end_point
-
     img_h, img_w = current_img.shape[:2]
 
     x_center = ((x1 + x2) / 2) / img_w
@@ -454,41 +454,60 @@ def save_crop():
 
     base_filename = os.path.splitext(os.path.basename(current_path))[0]
 
-    # =========================
-    # SIMPAN YOLO LABEL
-    # =========================
+    # Simpan label YOLO
     label_path = os.path.join(labels_train_folder, f"{base_filename}.txt")
     with open(label_path, "w") as f:
         f.write(f"0 {x_center:.6f} {y_center:.6f} {w:.6f} {h:.6f}\n")
-
     print(f"Label YOLO disimpan ke: {label_path}")
 
-    # =========================
-    # CROP REGION
-    # =========================
+    # CROP
     crop_img = current_img[y1:y2, x1:x2]
 
-    # =========================
-    # PREPROCESS
-    # =========================
+    # PREPROCESSING
     gray, enhanced, thresh = preprocess_image1(crop_img, base_filename)
 
-    # =========================
-    # SEGMENTASI + OCR
-    # =========================
-    chars_string = segment_characters(thresh, base_filename)
+    # ============================
+    # SHOW PREPROCESSING SUBPLOT
+    # ============================
+    plt.figure(figsize=(12,4))
+    plt.subplot(1,3,1)
+    plt.imshow(gray, cmap="gray")
+    plt.title("Gray"); plt.axis("off")
 
-    # =========================
-    # SUBPLOT LENGKAP (crop + preprocess + chars)
-    # =========================
-    show_and_save_subplot(
-        crop_img=crop_img,
-        gray=gray,
-        enhanced=enhanced,
-        thresh=thresh,
-        chars=chars_string,
-        base_filename=base_filename
-    )
+    plt.subplot(1,3,2)
+    plt.imshow(enhanced, cmap="gray")
+    plt.title("CLAHE"); plt.axis("off")
+
+    plt.subplot(1,3,3)
+    plt.imshow(thresh, cmap="gray")
+    plt.title("Threshold"); plt.axis("off")
+
+    plt.suptitle(f"Preprocessing ({base_filename})")
+    plt.tight_layout()
+    plt.show()
+    # ============================
+
+    # === Segmentasi Karakter + CNN ===
+    _, _, cnn_string = segment_characters(thresh, base_filename)
+
+    # Simpan hasil
+    os.makedirs("hasil_crop", exist_ok=True)
+    os.makedirs("hasil_preprocessing", exist_ok=True)
+    os.makedirs("hasil_csv", exist_ok=True)
+
+    crop_path = f"hasil_crop/{base_filename}_crop.png"
+    cv2.imwrite(crop_path, crop_img)
+
+    thresh_path = f"hasil_preprocessing/{base_filename}_thresh.png"
+    cv2.imwrite(thresh_path, thresh)
+
+    csv_path = f"hasil_csv/{base_filename}.csv"
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["hasil_cnn"])
+        writer.writerow([cnn_string])
+
+    print("\n[SELESAI] Semua hasil tersimpan.")
 
 # Pilih gambar
 def upload_image():
@@ -536,7 +555,6 @@ def show_image(path):
     fig.canvas.mpl_connect("key_press_event", on_key)
     draw_box()
     plt.show()
-
 
 # === Jalankan ===
 if __name__ == "__main__":
