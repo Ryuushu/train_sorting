@@ -1,38 +1,27 @@
-# library
+# ================== LIBRARY ==================
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
 import os
-import shutil
+import csv
 from tkinter import Tk
 from tkinter.filedialog import askopenfilename
-# import pytesseract
-# import easyocr
-import csv
 
+# ================== KONFIG ==================
 IMG_SIZE = 64
-<<<<<<< Updated upstream
 MODEL_PATH = r"char_model.h5"
 DATASET_DIR = "../train_ocr"  
-=======
-MODEL_PATH = r"C:\Users\Taufiqur Rahman\OneDrive\Documents\train_sorting\label_alamat_dataset\char_model.h5"
-DATASET_DIR = "train_ocr"  # folder berisi subfolder per karakter
-reader = easyocr.Reader(['en'], gpu=False)  
->>>>>>> Stashed changes
-
-output_crop_folder = "hasil_crop"
-output_pre_folder = "hasil_preprocessing"
-os.makedirs(output_crop_folder, exist_ok=True)
-os.makedirs(output_pre_folder, exist_ok=True)
-
 
 images_train_folder = r"images\train"
 labels_train_folder = r"labels\train"
 os.makedirs(images_train_folder, exist_ok=True)
 os.makedirs(labels_train_folder, exist_ok=True)
+os.makedirs("hasil_crop", exist_ok=True)
+os.makedirs("hasil_preprocessing", exist_ok=True)
+os.makedirs("hasil_csv", exist_ok=True)
 
-# Variabel Global
+# ================== VAR GLOBAL ==================
 start_point = None
 end_point = None
 dragging = False
@@ -41,95 +30,24 @@ current_img = None
 current_path = None
 fig = None
 ax = None
+
+poly_patch = None
+poly_coords = None
+
 _model = None
 _labels = None
 
-# Fungsi penamaan file
-def get_next_filename(folder, prefix="data", ext=".png"):
-    files = [f for f in os.listdir(folder) if f.endswith(ext)]
-    nums = []
-    for f in files:
-        name = os.path.splitext(f)[0]
-        try:
-            n = int(name.split("_")[-1])
-            nums.append(n)
-        except:
-            continue
-    next_num = max(nums) + 1 if nums else 1
-    return f"{prefix}_{next_num:04d}{ext}"
-
-def save_training_chars(chars, ground_truth):
-    # Folder baru khusus dataset training OCR
-    BASE_FOLDER = "train_ocr"
-    os.makedirs(BASE_FOLDER, exist_ok=True)
-
-    for img, label in zip(chars, ground_truth):
-
-        # Abaikan jika label bukan 1 karakter
-        if len(label) != 1:
-            continue
-
-        # Buat folder karakter di folder training
-        char_folder = f"{BASE_FOLDER}/{label}"
-        os.makedirs(char_folder, exist_ok=True)
-
-        # Hitung index file berikutnya
-        count = len(os.listdir(char_folder))
-
-        # Simpan gambar
-        save_path = f"{char_folder}/{label}_{count+1}.png"
-        cv2.imwrite(save_path, img)
-
-        print(f"[SAVE] {save_path}")
-
-    print("[DONE] Semua karakter tersimpan di folder dataset_training")
-
-def ocr_characters(chars, save_path=None):
-    "OCR tiap karakter menggunakan EasyOCR."
-    results = []
-    for i, c in enumerate(chars):
-
-        # EasyOCR butuh 3 channel (RGB)
-        if len(c.shape) == 2:
-            c_rgb = cv2.cvtColor(c, cv2.COLOR_GRAY2RGB)
-        else:
-            c_rgb = c
-
-        # OCR
-        out = reader.readtext(c_rgb, detail=0)
-
-        # Ambil huruf pertama jika ada
-        text = out[0] if len(out) > 0 else ""
-        text = text.strip()
-
-        # Ambil 1 karakter saja (untuk dataset training)
-        if len(text) > 1:
-            text = text[0]
-
-        results.append(text)
-
-    # Gabungkan semua karakter
-    full_text = "".join(results)
-    return results
-
+# ================== UTILITY ==================
 def load_model_and_labels(model_path=MODEL_PATH, dataset_dir=DATASET_DIR):
-    """
-    Muat model keras (.h5) dan susun daftar label dari folder dataset_dir.
-    Men-set global _model dan _labels.
-    """
     global _model, _labels
-
     if _model is not None and _labels is not None:
         return _model, _labels
 
-    # muat model
     if not os.path.isfile(model_path):
         raise FileNotFoundError(f"Model tidak ditemukan: {model_path}")
-
     print("[INFO] Loading model:", model_path)
     _model = tf.keras.models.load_model(model_path)
 
-    # ambil label dari nama folder di DATASET_DIR (sorted)
     if not os.path.isdir(dataset_dir):
         raise FileNotFoundError(f"Dataset dir tidak ditemukan: {dataset_dir}")
 
@@ -137,426 +55,236 @@ def load_model_and_labels(model_path=MODEL_PATH, dataset_dir=DATASET_DIR):
         d for d in os.listdir(dataset_dir)
         if os.path.isdir(os.path.join(dataset_dir, d))
     ])
-
-    if not labels:
-        raise ValueError(f"Tidak ada folder label ditemukan di: {dataset_dir}")
-
     _labels = labels
     print("[INFO] Loaded labels:", _labels)
-
     return _model, _labels
 
-def predict_char_from_array(img_array):
-    """
-    Menerima crop karakter (numpy array), mengembalikan tuple (char, confidence)
-    Pastikan model & labels sudah ada; fungsi ini akan memuatnya bila perlu.
-    """
-    # muat model & labels jika belum
-    model, labels = load_model_and_labels()
-
-    # preprocess
-    proc = preprocess_image(img_array, img_size=IMG_SIZE)
-
-    # prediksi
-    preds = model.predict(proc, verbose=0)  # returns [[...]]
-    preds = np.asarray(preds).squeeze()  # jadi 1D array (num_classes,)
-
-    # indeks max
-    idx = int(np.argmax(preds))
-    confidence = float(preds[idx])
-    char = labels[idx]
-
-    return char, confidence
-
-def segment_characters(thresh_img, base_filename="noname"):
-    "Segmentasi karakter + normalisasi + prediksi CNN + gabung jadi 1 string."
-    if np.mean(thresh_img) > 127:
-        thresh_img = cv2.bitwise_not(thresh_img)
-
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-    clean = cv2.morphologyEx(thresh_img, cv2.MORPH_OPEN, kernel, iterations=1)
-
-    # Temukan kontur karakter
-    contours, _ = cv2.findContours(clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    h_img, w_img = clean.shape
-    char_boxes = []
-    for cnt in contours:
-        x, y, w, h = cv2.boundingRect(cnt)
-        if 1 < w < w_img * 0.9 and 8 < h < h_img * 0.95:
-            char_boxes.append((x, y, w, h))
-
-    if not char_boxes:
-        print("Tidak ada karakter terdeteksi.")
-        return [], [], ""
-
-    # Urutkan kiri ke kanan
-    char_boxes = sorted(char_boxes, key=lambda b: b[0])
-
-    target_size = (80, 120)
-    chars = []
-
-    # Normalisasi tiap karakter
-    for (x, y, w, h) in char_boxes:
-        char_crop = clean[y:y + h, x:x + w]
-        pad_x = max(0, (h - w) // 2)
-        padded = cv2.copyMakeBorder(
-            char_crop, 5, 5, pad_x + 2, pad_x + 2,
-            cv2.BORDER_CONSTANT, value=(0, 0, 0)
-        )
-        resized = cv2.resize(padded, target_size, interpolation=cv2.INTER_AREA)
-        chars.append(resized)
-
-    print(f"[{len(chars)} karakter tersegmentasi].")
-
-    # === Subplot hasil segmentasi ===
-    fig, axs = plt.subplots(1, len(chars), figsize=(15, 4))
-    if len(chars) == 1:
-        axs = [axs]
-    for i, char in enumerate(chars):
-        axs[i].imshow(char, cmap="gray")
-        axs[i].set_title(f"Char {i + 1}")
-        axs[i].axis("off")
-    plt.suptitle(f"Hasil Segmentasi Karakter ({base_filename})")
-    plt.tight_layout()
-    plt.show()
-
-    # === EASYOCR (opsional) ===
-    ocr_csv_path = os.path.join("hasil_segmentasi", f"{base_filename}_ocr.csv")
-    os.makedirs("hasil_segmentasi", exist_ok=True)
-    # results_easyocr = ocr_characters(chars, save_path=ocr_csv_path)
-    # save_training_chars(chars, results_easyocr)
-
-    # ============================================
-    #  CNN PREDIKSI TIAP KARAKTER + GABUNG STRING
-    # ============================================
-    print("\n==== PREDIKSI CNN ====")
-    cnn_results = []
-    cnn_string = ""
-
-    for i, char_img in enumerate(chars):
-        pred_char, conf = predict_char_from_array(char_img)
-        cnn_results.append((pred_char, conf))
-
-        cnn_string += pred_char  # 🔥 gabungkan ke string
-
-        print(f"Char-{i+1}: {pred_char} (conf={conf:.3f})")
-
-    print("\n=== GABUNGAN KARAKTER CNN ===")
-    print("->", cnn_string)
-
-    # return: gambar character, hasil tuple, string final
-    return chars, cnn_results, cnn_string
-
-def show_and_save_subplot(crop_img, gray, enhanced, thresh, chars, base_filename):
-    """Menampilkan subplot besar + menyimpannya sebagai file PNG."""
-    n_chars = len(chars)
-    total_cols = 4  # crop + gray + clahe + thresh
-
-    fig, axs = plt.subplots(1, total_cols, figsize=(4*total_cols, 5))
-
-    # 1. Crop
-    axs[0].imshow(cv2.cvtColor(crop_img, cv2.COLOR_BGR2RGB))
-    axs[0].set_title("Crop")
-    axs[0].axis("off")
-
-    # 2. Grayscale
-    axs[1].imshow(gray, cmap="gray")
-    axs[1].set_title("Gray")
-    axs[1].axis("off")
-
-    # 3. CLAHE
-    axs[2].imshow(enhanced, cmap="gray")
-    axs[2].set_title("CLAHE")
-    axs[2].axis("off")
-
-    # 4. Threshold
-    axs[3].imshow(thresh, cmap="gray")
-    axs[3].set_title("Threshold")
-    axs[3].axis("off")
-
-    plt.tight_layout()
-
-    # Simpan
-    os.makedirs("hasil_subplot", exist_ok=True)
-    out_path = f"hasil_subplot/{base_filename}_subplot.png"
-    plt.savefig(out_path, dpi=200)
-    print(f"[SAVE] Subplot lengkap disimpan ke: {out_path}")
-
-    plt.show()
-
 def preprocess_image(img, img_size=IMG_SIZE):
-    """
-    Input: img (numpy array), grayscale or BGR.
-    Output: array shape (1, IMG_SIZE, IMG_SIZE, 1), dtype float32, scaled [0,1]
-    """
-    if img is None:
-        raise ValueError("preprocess_image menerima None")
-
-    # pastikan grayscale
     if len(img.shape) == 3:
         img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-    # resize - mempertahankan aspect? model biasanya dilatih pada square
     img_resized = cv2.resize(img, (img_size, img_size), interpolation=cv2.INTER_AREA)
-
-    # normalisasi ke [0,1]
     img_norm = img_resized.astype("float32") / 255.0
-
-    # ubah shape -> (1, img_size, img_size, 1)
     img_final = np.expand_dims(img_norm, axis=(0, -1))
-
     return img_final
 
-# Fungsi preprocessing citra setelah crop
 def preprocess_image1(img, base_filename="noname"):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
     clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
     enhanced = clahe.apply(gray)
-
     thresh = cv2.adaptiveThreshold(
-        enhanced, 255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY_INV,
-        25, 12
+        enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV, 25, 12
     )
-
     return gray, enhanced, thresh
 
-# Deteksi ROI otomatis
-def auto_detect_box(img, debug=False):
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    blur = cv2.GaussianBlur(gray, (5,5), 0)
+def crop_rotated(img, box):
+    pts = np.float32(box)
+    pts = pts[np.argsort(pts[:,1])]  # sort by Y
+    top = pts[:2]
+    bottom = pts[2:]
+    top = top[np.argsort(top[:,0])]
+    bottom = bottom[np.argsort(bottom[:,0])]
+    pts = np.float32([top[0], top[1], bottom[1], bottom[0]])
+    w = int(np.linalg.norm(pts[0] - pts[1]))
+    h = int(np.linalg.norm(pts[0] - pts[3]))
+    dst = np.float32([[0,0],[w,0],[w,h],[0,h]])
+    M = cv2.getPerspectiveTransform(pts, dst)
+    warped = cv2.warpPerspective(img, M, (w, h))
+    return warped
 
-    # === 1️⃣ Deteksi tepi kertas putih ===
+def save_uploaded_image():
+    base_filename = os.path.splitext(os.path.basename(current_path))[0]
+    dst_path = os.path.join(images_train_folder, f"{base_filename}.jpg")
+    cv2.imwrite(dst_path, current_img)
+    print(f"Gambar asli disimpan ke: {dst_path}")
+
+# ================== DETEKSI ROI ==================
+def auto_detect_box(img, debug=False):
+    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+    blur = cv2.GaussianBlur(gray, (5,5), 0)
     edges = cv2.Canny(blur, 50, 150)
     contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    # print(contours)
+
     if not contours:
         print("Tidak ada kontur kertas terdeteksi.")
         return None
 
-    # Ambil kontur terbesar (biasanya kertas)
     contours = sorted(contours, key=cv2.contourArea, reverse=True)
     paper_cnt = contours[0]
-    x_p, y_p, w_p, h_p = cv2.boundingRect(paper_cnt)
+    rect = cv2.minAreaRect(paper_cnt)
+    paper_box = cv2.boxPoints(rect)
+    paper_box = np.intp(paper_box)
 
-    # Crop area kertas
-    paper_crop = img[y_p:y_p+h_p, x_p:x_p+w_p]
-
-    # === 2️⃣ Dari dalam kertas, cari area tulisan gelap ===
-    gray_paper = cv2.cvtColor(paper_crop, cv2.COLOR_BGR2GRAY)
-    _, text_thresh = cv2.threshold(gray_paper, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-
-    # Cari kontur tulisan
+    paper_crop = crop_rotated(gray, paper_box)
+    _, text_thresh = cv2.threshold(paper_crop, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     contours_text, _ = cv2.findContours(text_thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
     text_boxes = []
     for c in contours_text:
-        x, y, w, h = cv2.boundingRect(c)
-        if 20 < w < paper_crop.shape[1]*0.9 and 10 < h < paper_crop.shape[0]*0.5:
-            text_boxes.append((x, y, w, h))
+        r = cv2.minAreaRect(c)
+        (cx, cy), (w, h), angle = r
+        if 20 < w < paper_crop.shape[1] * 0.9 and 10 < h < paper_crop.shape[0] * 0.5:
+            text_boxes.append(r)
 
     if not text_boxes:
-        print("Tidak ada area tulisan terdeteksi dalam kertas.")
-        return (x_p, y_p, x_p+w_p, y_p+h_p)
+        print("Tidak ada area tulisan terdeteksi.")
+        return paper_box  # fallback
 
-    # Ambil area tulisan terbesar (biasanya alamat/kecamatan)
-    text_boxes = sorted(text_boxes, key=lambda b: b[2]*b[3], reverse=True)
-    x_t, y_t, w_t, h_t = text_boxes[0]
+    text_boxes = sorted(text_boxes, key=lambda r: r[1][0]*r[1][1], reverse=True)
+    (cx, cy), (w_t, h_t), angle = text_boxes[0]
+    text_box = cv2.boxPoints(text_boxes[0])
+    text_box = np.intp(text_box)
 
-    # Perkecil bounding box (misalnya 10% di setiap sisi)
-    shrink_ratio = 0.1  # bisa kamu ubah ke 0.05 atau 0.2
-    x_t = int(x_t + w_t * shrink_ratio)
-    y_t = int(y_t + h_t * shrink_ratio)
-    w_t = int(w_t * (1 - 2 * shrink_ratio))
-    h_t = int(h_t * (1 - 2 * shrink_ratio))
-
-
-    # Konversi koordinat ke posisi asli gambar
-    x_final = x_p + x_t
-    y_final = y_p + y_t
-    w_final = w_t
-    h_final = h_t
+    shrink = 0.1
+    center = np.array([cx, cy])
+    points = text_box - center
+    points = points * (1-shrink)
+    shrink_box = (points + center).astype(int)
 
     if debug:
         vis = img.copy()
-        cv2.rectangle(vis, (x_p, y_p), (x_p+w_p, y_p+h_p), (255, 0, 0), 2)  # kotak kertas biru
-        cv2.rectangle(vis, (x_final, y_final), (x_final+w_final, y_final+h_final), (0, 255, 0), 2)  # tulisan hijau
+        cv2.drawContours(vis, [paper_box], 0, (255,0,0), 3)
+        cv2.drawContours(vis, [shrink_box], 0, (0,255,0), 3)
         plt.imshow(cv2.cvtColor(vis, cv2.COLOR_BGR2RGB))
-        plt.title("Deteksi Kertas (Biru) dan Tulisan (Hijau)")
+        plt.title("Deteksi Kertas & Tulisan")
         plt.axis("off")
         plt.show()
 
-    return (x_final, y_final, x_final + w_final, y_final + h_final)
+    return shrink_box
 
-# Gambar bounding box
-def draw_box():
-    img_show = current_img.copy()
-    if start_point and end_point:
-        cv2.rectangle(img_show, start_point, end_point, (0, 255, 0), 3)
-    ax.imshow(cv2.cvtColor(img_show, cv2.COLOR_BGR2RGB))
-    fig.canvas.draw()
-
-# Mouse handlers
+# ================== MOUSE HANDLER ==================
 def on_press(event):
     global dragging, offset
     if event.xdata is None or event.ydata is None:
         return
     x, y = int(event.xdata), int(event.ydata)
-    x1, y1 = start_point
-    x2, y2 = end_point
-    if x1 <= x <= x2 and y1 <= y <= y2:
+    if poly_patch is not None and poly_patch.get_path().contains_point((x,y)):
         dragging = True
-        offset = (x - x1, y - y1)
+        offset = (x, y)
 
 def on_move(event):
-    global start_point, end_point
-    if not dragging:
+    global poly_coords, poly_patch, offset
+    if not dragging or poly_coords is None:
         return
     if event.xdata is None or event.ydata is None:
         return
     x, y = int(event.xdata), int(event.ydata)
-    dx, dy = offset
-    w = end_point[0] - start_point[0]
-    h = end_point[1] - start_point[1]
-    new_x1 = x - dx
-    new_y1 = y - dy
-    new_x1 = max(0, min(new_x1, current_img.shape[1] - w))
-    new_y1 = max(0, min(new_y1, current_img.shape[0] - h))
-    start_point = (new_x1, new_y1)
-    end_point = (new_x1 + w, new_y1 + h)
-    draw_box()
+    dx = x - offset[0]
+    dy = y - offset[1]
+    offset = (x, y)
+    poly_coords[:,0] += dx
+    poly_coords[:,1] += dy
+    poly_patch.set_xy(poly_coords)
+    fig.canvas.draw_idle()
 
 def on_release(event):
     global dragging
     dragging = False
 
 def on_key(event):
-    if event.key == 'c':  # tekan 'C' untuk menyimpan crop & preprocessing
+    if event.key == 'c':
         save_crop()
 
-# Simpan hasil crop & preprocessing
+# ================== SEGMENTASI KARAKTER ==================
+def segment_characters(thresh_img, base_filename="noname"):
+    if np.mean(thresh_img) > 127:
+        thresh_img = cv2.bitwise_not(thresh_img)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT,(2,2))
+    clean = cv2.morphologyEx(thresh_img, cv2.MORPH_OPEN, kernel, iterations=1)
+    contours, _ = cv2.findContours(clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    h_img, w_img = clean.shape
+    char_boxes = [(x,y,w,h) for cnt in contours for x,y,w,h in [cv2.boundingRect(cnt)] if 1<w<w_img*0.9 and 8<h<h_img*0.95]
+    if not char_boxes:
+        print("Tidak ada karakter terdeteksi.")
+        return [], [], ""
+    char_boxes = sorted(char_boxes, key=lambda b: b[0])
+    target_size = (80,120)
+    chars = []
+    for x,y,w,h in char_boxes:
+        char_crop = clean[y:y+h, x:x+w]
+        pad_x = max(0,(h-w)//2)
+        padded = cv2.copyMakeBorder(char_crop,5,5,pad_x+2,pad_x+2,cv2.BORDER_CONSTANT,value=(0,0,0))
+        resized = cv2.resize(padded, target_size, interpolation=cv2.INTER_AREA)
+        chars.append(resized)
+    print(f"[{len(chars)} karakter tersegmentasi].")
+    return chars, [], ""  # bisa tambahkan CNN prediction jika ingin
+
+# ================== SAVE CROP ==================
 def save_crop():
-    global current_img, current_path, start_point, end_point
-
-    # === Simpan gambar asli ke folder YOLO ===
+    global current_img, current_path, poly_coords
     save_uploaded_image()
-
-    x1, y1 = start_point
-    x2, y2 = end_point
     img_h, img_w = current_img.shape[:2]
+    xs = poly_coords[:,0]; ys = poly_coords[:,1]
+    x1, y1 = int(xs.min()), int(ys.min())
+    x2, y2 = int(xs.max()), int(ys.max())
 
-    x_center = ((x1 + x2) / 2) / img_w
-    y_center = ((y1 + y2) / 2) / img_h
-    w = (x2 - x1) / img_w
-    h = (y2 - y1) / img_h
+    x_center = ((x1+x2)/2)/img_w
+    y_center = ((y1+y2)/2)/img_h
+    w = (x2-x1)/img_w
+    h = (y2-y1)/img_h
 
     base_filename = os.path.splitext(os.path.basename(current_path))[0]
-
-    # Simpan label YOLO
     label_path = os.path.join(labels_train_folder, f"{base_filename}.txt")
-    with open(label_path, "w") as f:
+    with open(label_path,"w") as f:
         f.write(f"0 {x_center:.6f} {y_center:.6f} {w:.6f} {h:.6f}\n")
     print(f"Label YOLO disimpan ke: {label_path}")
 
-    # CROP
     crop_img = current_img[y1:y2, x1:x2]
-
-    # PREPROCESSING
     gray, enhanced, thresh = preprocess_image1(crop_img, base_filename)
 
-    # ============================
-    # SHOW PREPROCESSING SUBPLOT
-    # ============================
     plt.figure(figsize=(12,4))
-    plt.subplot(1,3,1)
-    plt.imshow(gray, cmap="gray")
-    plt.title("Gray"); plt.axis("off")
+    plt.subplot(1,3,1); plt.imshow(gray,cmap="gray"); plt.title("Gray"); plt.axis("off")
+    plt.subplot(1,3,2); plt.imshow(enhanced,cmap="gray"); plt.title("CLAHE"); plt.axis("off")
+    plt.subplot(1,3,3); plt.imshow(thresh,cmap="gray"); plt.title("Threshold"); plt.axis("off")
+    plt.suptitle(f"Preprocessing ({base_filename})"); plt.tight_layout(); plt.show()
 
-    plt.subplot(1,3,2)
-    plt.imshow(enhanced, cmap="gray")
-    plt.title("CLAHE"); plt.axis("off")
-
-    plt.subplot(1,3,3)
-    plt.imshow(thresh, cmap="gray")
-    plt.title("Threshold"); plt.axis("off")
-
-    plt.suptitle(f"Preprocessing ({base_filename})")
-    plt.tight_layout()
-    plt.show()
-    # ============================
-
-    # === Segmentasi Karakter + CNN ===
-    _, _, cnn_string = segment_characters(thresh, base_filename)
-
-    # Simpan hasil
-    os.makedirs("hasil_crop", exist_ok=True)
-    os.makedirs("hasil_preprocessing", exist_ok=True)
-    os.makedirs("hasil_csv", exist_ok=True)
+    chars, _, cnn_string = segment_characters(thresh, base_filename)
 
     crop_path = f"hasil_crop/{base_filename}_crop.png"
     cv2.imwrite(crop_path, crop_img)
-
     thresh_path = f"hasil_preprocessing/{base_filename}_thresh.png"
     cv2.imwrite(thresh_path, thresh)
-
     csv_path = f"hasil_csv/{base_filename}.csv"
-    with open(csv_path, "w", newline="") as f:
+    with open(csv_path,"w",newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["hasil_cnn"])
         writer.writerow([cnn_string])
-
     print("\n[SELESAI] Semua hasil tersimpan.")
 
-# Pilih gambar
+# ================== PILIH GAMBAR ==================
 def upload_image():
     root = Tk()
     root.withdraw()
-    file_path = askopenfilename(
-        title="Pilih Gambar",
-        filetypes=[("Image files", "*.jpg *.jpeg *.png")]
-    )
+    file_path = askopenfilename(title="Pilih Gambar", filetypes=[("Image files","*.jpg *.jpeg *.png")])
     root.destroy()
     return file_path
 
-def save_uploaded_image():
-    base_filename = os.path.splitext(os.path.basename(current_path))[0]
-    dst_path = os.path.join(images_train_folder, f"{base_filename}.jpg")
-
-    cv2.imwrite(dst_path, current_img)
-    print(f"Gambar asli disimpan ke: {dst_path}")
-
-# Tampilkan gambar dan ROI
+# ================== SHOW IMAGE ==================
 def show_image(path):
-    global current_img, current_path, fig, ax
-    global start_point, end_point
-
+    global current_img, current_path, fig, ax, poly_coords, poly_patch
     current_img = cv2.imread(path)
+    img_rgb = cv2.cvtColor(current_img, cv2.COLOR_BGR2RGB)
     current_path = path
-    auto_box = auto_detect_box(current_img)
+    auto_box = auto_detect_box(img_rgb, debug=False)
 
-    if auto_box:
-        start_point = (auto_box[0], auto_box[1])
-        end_point = (auto_box[2], auto_box[3])
-        print(f"Otomatis terdeteksi: x={auto_box[0]}, y={auto_box[1]}, "
-              f"w={auto_box[2] - auto_box[0]}, h={auto_box[3] - auto_box[1]}")
-    else:
-        start_point = (150, 100)
-        end_point = (300, 200)
-        print("Tidak terdeteksi otomatis, gunakan posisi default.")
+    if auto_box is None:
+        auto_box = np.array([[150,100],[300,100],[300,200],[150,200]])
 
-    fig, ax = plt.subplots(figsize=(8, 8))
+    poly_coords = auto_box.copy()
+    fig, ax = plt.subplots(figsize=(8,8))
     ax.imshow(cv2.cvtColor(current_img, cv2.COLOR_BGR2RGB))
     ax.set_title("Geser ROI lalu tekan 'C' untuk crop & segmentasi karakter")
+
+    poly_patch = plt.Polygon(poly_coords, closed=True, fill=False, linewidth=2, edgecolor='yellow')
+    ax.add_patch(poly_patch)
+
     fig.canvas.mpl_connect("button_press_event", on_press)
     fig.canvas.mpl_connect("button_release_event", on_release)
     fig.canvas.mpl_connect("motion_notify_event", on_move)
     fig.canvas.mpl_connect("key_press_event", on_key)
-    draw_box()
     plt.show()
 
-# === Jalankan ===
+# ================== MAIN ==================
 if __name__ == "__main__":
     file_path = upload_image()
     if file_path:
