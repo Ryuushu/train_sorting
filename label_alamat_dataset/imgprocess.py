@@ -37,6 +37,53 @@ poly_coords = None
 _model = None
 _labels = None
 
+# menyimpan hasil rotasi dan gambar 
+def save_augmented_rotations(img, save_path, base_name):
+    """
+    Simpan rotasi huruf sesuai ukuran asli (tanpa mengecilkan)
+    """
+
+    os.makedirs(save_path, exist_ok=True)
+
+    # ukuran asli character (misal 240x160)
+    h, w = img.shape
+
+    angles = [0, 45, 90, 135, 180, 225, 270, 315]
+
+    for i, angle in enumerate(angles):
+        # rotasi mempertahankan ukuran asli
+        M = cv2.getRotationMatrix2D((w//2, h//2), angle, 1.0)
+        rotated = cv2.warpAffine(img, M, (w, h), borderValue=0)
+
+        filename = f"{base_name}_rot{i}.png"
+        cv2.imwrite(os.path.join(save_path, filename), rotated)
+
+    print(f"[OK] Rotasi 8 arah disimpan untuk {base_name}")
+
+# menyimpan karakter ke dataset
+def save_training_chars_manual(chars):
+    BASE_DIR = "train_ocr"
+    os.makedirs(BASE_DIR, exist_ok=True)
+
+    for idx, img in enumerate(chars):
+        cv2.imshow("Label Karakter (tekan huruf)", img)
+        key = cv2.waitKey(0)
+
+        label = chr(key).upper()
+        print("Label:", label)
+
+        save_dir = os.path.join(BASE_DIR, label)
+        os.makedirs(save_dir, exist_ok=True)
+
+        count = len(os.listdir(save_dir))
+
+        # ========= INI HARUS DI DALAM LOOP =========
+        save_augmented_rotations(img, save_dir, f"{label}_{count}")
+        # ===========================================
+
+    cv2.destroyAllWindows()
+    print("[OK] Semua karakter tersimpan.")
+
 # ================== UTILITY ==================
 def load_model_and_labels(model_path=MODEL_PATH, dataset_dir=DATASET_DIR):
     global _model, _labels
@@ -239,6 +286,29 @@ def save_crop():
     plt.suptitle(f"Preprocessing ({base_filename})"); plt.tight_layout(); plt.show()
 
     chars, _, cnn_string = segment_characters(thresh, base_filename)
+
+    # ==== TAMPILKAN HASIL SEGMENTASI KARAKTER ====
+    if len(chars) > 0:
+        cols = min(10, len(chars))        # kolom max 10
+        rows = int(np.ceil(len(chars)/cols))
+
+        plt.figure(figsize=(cols*1.5, rows*2))
+        for i, c in enumerate(chars):
+            plt.subplot(rows, cols, i+1)
+
+            # ===== tampilkan lebih besar tanpa mengubah file =====
+            c_display = cv2.resize(c, (160, 240), interpolation=cv2.INTER_NEAREST)
+            plt.imshow(c_display, cmap='gray')
+            # =====================================================
+
+            plt.title(f"Char {i+1}")
+            plt.axis("off")
+
+        plt.suptitle("Hasil Segmentasi Karakter")
+        plt.tight_layout()
+        plt.show()
+
+        save_training_chars_manual(chars)
 
     crop_path = f"hasil_crop/{base_filename}_crop.png"
     cv2.imwrite(crop_path, crop_img)
